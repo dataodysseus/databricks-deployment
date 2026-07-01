@@ -1,0 +1,5 @@
+# Backend config for `terraform init -backend-config=backend.hcl` (partial backend in main.tf).
+# Copy to backend.hcl (gitignored) and set your real state bucket + per-env prefix.
+#   cp backend.hcl.example backend.hcl
+bucket = "databricks-tfstate-your-gcp-project-id"
+prefix = "databricks/dev"

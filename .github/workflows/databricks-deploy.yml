@@ -1,0 +1,201 @@
+# ============================================================
+# Deploy Databricks Workspace on GCP (Terraform + WIF/OIDC)
+# ============================================================
+# Purpose : Plan / apply / destroy the customer-managed-VPC
+#           Databricks workspace defined in this repo, from CI.
+#
+# Auth    : Reuses your existing Workload Identity Federation
+#           (same secrets as the VM/Cloud Run workflows):
+#             GCP_PROJECT_ID
+#             GCP_WORKLOAD_IDENTITY_PROVIDER
+#             GCP_SERVICE_ACCOUNT   <-- MUST be the automation SA
+#                                       that is a Databricks ACCOUNT ADMIN
+#
+# Design (answers "secrets vs dropdown?"):
+#   • SENSITIVE / per-environment values  -> GitHub *Environment* secrets
+#       GCP_PROJECT_ID, GCP_WORKLOAD_IDENTITY_PROVIDER, GCP_SERVICE_ACCOUNT,
+#       DATABRICKS_ACCOUNT_ID, DATABRICKS_ADMIN_USER
+#   • NON-SENSITIVE run-time choices      -> workflow_dispatch dropdowns
+#       environment, action, region, workspace_name
+#   The `environment` dropdown selects which Environment's secrets load
+#   (and, for prod, any required-reviewer protection you configure).
+#
+# One-time prerequisites:
+#   1. State bucket exists:  gs://databricks-tfstate-<GCP_PROJECT_ID>  (versioned)
+#   2. The automation SA can mint its own OIDC token for Databricks:
+#        gcloud iam service-accounts add-iam-policy-binding \
+#          "$GCP_SERVICE_ACCOUNT" \
+#          --member="serviceAccount:$GCP_SERVICE_ACCOUNT" \
+#          --role="roles/iam.serviceAccountTokenCreator"
+#   3. Create GitHub Environments (dev/test/prod) each holding the secrets above.
+# ============================================================
+
+name: "Deploy Databricks Workspace"
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target environment (selects the GitHub Environment + its secrets)"
+        required: true
+        default: "dev"
+        type: choice
+        options:
+          - dev
+          - test
+          - prod
+
+      action:
+        description: "Terraform action to run"
+        required: true
+        default: "plan"
+        type: choice
+        options:
+          - plan       # dry run only — safe, makes no changes
+          - apply      # create/update the workspace
+          - destroy    # tear the workspace down (handles the db-* firewall quirk)
+
+      region:
+        description: "GCP region"
+        required: true
+        default: "us-central1"
+        type: choice
+        options:
+          - us-central1
+          - us-east1
+          - us-west1
+          - europe-west1
+          - europe-west2
+          - asia-east1
+          - asia-southeast1
+
+      workspace_name:
+        description: "Databricks workspace name (blank = databricks-gcp-<environment>)"
+        required: false
+        default: ""
+        type: string
+
+# One run per environment at a time (belt-and-suspenders on top of GCS state locking).
+concurrency:
+  group: "databricks-${{ inputs.environment }}"
+  cancel-in-progress: false
+
+jobs:
+  terraform:
+    name: "${{ inputs.action }} → ${{ inputs.environment }}"
+    runs-on: ubuntu-latest
+
+    # Pulls this GitHub Environment's secrets + protection rules (e.g. prod approvals).
+    environment: ${{ inputs.environment }}
+
+    permissions:
+      contents: read
+      id-token: write   # required for WIF/OIDC
+
+    env:
+      # ── Terraform input variables (TF_VAR_* are read automatically) ──
+      TF_VAR_gcp_project_id:                   ${{ secrets.GCP_PROJECT_ID }}
+      TF_VAR_gcp_region:                       ${{ inputs.region }}
+      TF_VAR_environment:                      ${{ inputs.environment }}
+      TF_VAR_databricks_account_id:            ${{ secrets.DATABRICKS_ACCOUNT_ID }}
+      TF_VAR_automation_service_account_email: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+      TF_VAR_workspace_admin_user:             ${{ secrets.DATABRICKS_ADMIN_USER }}
+      TF_VAR_workspace_name: ${{ inputs.workspace_name != '' && inputs.workspace_name || format('databricks-gcp-{0}', inputs.environment) }}
+
+      # ── Databricks provider auth (account-level, google-id impersonation) ──
+      DATABRICKS_HOST: "https://accounts.gcp.databricks.com"
+      DATABRICKS_ACCOUNT_ID: ${{ secrets.DATABRICKS_ACCOUNT_ID }}
+      DATABRICKS_GOOGLE_SERVICE_ACCOUNT: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Authenticate to GCP (Workload Identity Federation)
+        uses: google-github-actions/auth@v2
+        with:
+          project_id: "${{ secrets.GCP_PROJECT_ID }}"
+          workload_identity_provider: "${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}"
+          service_account: "${{ secrets.GCP_SERVICE_ACCOUNT }}"
+
+      - name: Set up Google Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: "${{ secrets.GCP_PROJECT_ID }}"
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.15.7"   # match the version that wrote the state
+          terraform_wrapper: false
+
+      - name: Terraform Init (GCS backend, per-environment prefix)
+        run: |
+          terraform init -input=false \
+            -backend-config="bucket=databricks-tfstate-${{ secrets.GCP_PROJECT_ID }}" \
+            -backend-config="prefix=databricks/${{ inputs.environment }}"
+
+      - name: Terraform Validate
+        run: terraform validate
+
+      # Plan runs for every action (a plan is the front half of apply/destroy).
+      - name: Terraform Plan
+        run: |
+          if [[ "${{ inputs.action }}" == "destroy" ]]; then
+            terraform plan -destroy -input=false
+          else
+            terraform plan -input=false
+          fi
+
+      - name: Terraform Apply
+        if: ${{ inputs.action == 'apply' }}
+        run: terraform apply -input=false -auto-approve
+
+      # Destroy handles the Databricks "orphaned firewall" quirk: Databricks creates
+      # untracked db-* firewall rules inside the VPC that block VPC deletion. Retry
+      # destroy, cleaning those up between attempts (mirrors scripts/teardown.sh).
+      - name: Terraform Destroy (with orphan-firewall cleanup)
+        if: ${{ inputs.action == 'destroy' }}
+        run: |
+          set -euo pipefail
+          VPC="databricks-vpc-${{ inputs.environment }}"
+          PROJECT="${{ secrets.GCP_PROJECT_ID }}"
+
+          cleanup_orphans() {
+            local rules
+            rules="$(gcloud compute firewall-rules list --project="$PROJECT" \
+                      --filter="network~${VPC}" --format='value(name)' 2>/dev/null || true)"
+            [[ -z "$rules" ]] && { echo "No leftover firewall rules on ${VPC}."; return 0; }
+            echo "Deleting untracked Databricks firewall rules on ${VPC}:"
+            while read -r r; do
+              [[ -z "$r" ]] && continue
+              gcloud compute firewall-rules delete "$r" --project="$PROJECT" --quiet && echo "  deleted $r"
+            done <<< "$rules"
+          }
+
+          for attempt in 1 2 3; do
+            echo "── terraform destroy (attempt ${attempt}/3) ──"
+            if terraform destroy -input=false -auto-approve; then
+              echo "✅ Destroy complete."; exit 0
+            fi
+            echo "Destroy failed — cleaning orphan firewalls and retrying…"
+            cleanup_orphans
+          done
+          echo "❌ Destroy still failing after 3 attempts."; exit 1
+
+      - name: Summary
+        if: ${{ always() }}
+        run: |
+          {
+            echo "## Databricks ${{ inputs.action }} — ${{ inputs.environment }}"
+            echo ""
+            echo "| Field | Value |"
+            echo "|---|---|"
+            echo "| Action | \`${{ inputs.action }}\` |"
+            echo "| Environment | \`${{ inputs.environment }}\` |"
+            echo "| Region | \`${{ inputs.region }}\` |"
+            echo "| Result | ${{ job.status }} |"
+            if [[ "${{ inputs.action }}" == "apply" && "${{ job.status }}" == "success" ]]; then
+              echo "| Workspace URL | $(terraform output -raw workspace_url 2>/dev/null || echo n/a) |"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

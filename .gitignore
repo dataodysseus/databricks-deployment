@@ -15,6 +15,10 @@ terraform.tfvars
 *.tfvars
 !*.tfvars.example
 
+# Backend config holds the real state-bucket name (contains project id). Commit the
+# .example only. NOTE: .terraform.lock.hcl is NOT matched here (different name) and stays committed.
+backend.hcl
+
 # Crash logs
 crash.log
 crash.*.log

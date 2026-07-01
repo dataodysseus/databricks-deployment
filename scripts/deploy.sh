@@ -33,11 +33,17 @@ export DATABRICKS_HOST="https://accounts.gcp.databricks.com"
 export DATABRICKS_ACCOUNT_ID="$(tfvar databricks_account_id)"
 export DATABRICKS_GOOGLE_SERVICE_ACCOUNT="$(tfvar automation_service_account_email)"
 
+GCP_PROJECT_ID="$(tfvar gcp_project_id)"
+TFSTATE_BUCKET="databricks-tfstate-${GCP_PROJECT_ID}"
+
 echo ""
 echo "── Deploying env=${ENV} (account ${DATABRICKS_ACCOUNT_ID}) ──"
 echo ""
 
-terraform init -input=false >/dev/null
+# Init against the GCS remote-state backend, per-environment prefix.
+terraform init -input=false -reconfigure \
+  -backend-config="bucket=${TFSTATE_BUCKET}" \
+  -backend-config="prefix=databricks/${ENV}" >/dev/null
 terraform apply -var-file="$VAR_FILE" -auto-approve
 
 echo ""

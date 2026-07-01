@@ -73,7 +73,11 @@ cleanup_orphan_firewalls() {
   done <<< "$rules"
 }
 
-terraform init -input=false >/dev/null
+# Init against the GCS remote-state backend, per-environment prefix.
+TFSTATE_BUCKET="databricks-tfstate-${GCP_PROJECT_ID}"
+terraform init -input=false -reconfigure \
+  -backend-config="bucket=${TFSTATE_BUCKET}" \
+  -backend-config="prefix=databricks/${ENV}" >/dev/null
 
 attempt=1; max=3
 while (( attempt <= max )); do

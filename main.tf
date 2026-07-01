@@ -6,6 +6,14 @@
 terraform {
   required_version = ">= 1.5.0"
 
+  # Remote state in GCS. PARTIAL config on purpose — the bucket name (which contains
+  # the GCP project id) and per-environment prefix are supplied at init time so no
+  # environment-specific value is committed to this public repo:
+  #   local: terraform init -backend-config=backend.hcl        (backend.hcl is gitignored)
+  #   CI   : terraform init -backend-config="bucket=$TFSTATE_BUCKET" \
+  #                         -backend-config="prefix=databricks/$ENV"
+  backend "gcs" {}
+
   required_providers {
     google = {
       source  = "hashicorp/google"
