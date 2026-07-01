@@ -1,0 +1,24 @@
+###############################################################################
+# Prod Environment - Variable Values (TEMPLATE)
+#
+# Copy to prod.tfvars and fill in real values (prod.tfvars is gitignored):
+#   cp environments/prod/prod.tfvars.example environments/prod/prod.tfvars
+###############################################################################
+
+gcp_project_id        = "your-gcp-project-id" # use a separate prod project if you have one
+gcp_region            = "us-central1"
+environment           = "prod"
+databricks_account_id = "00000000-0000-0000-0000-000000000000"
+workspace_name        = "databricks-gcp-prod"
+
+# Automation SA (must be a Databricks Account Admin) + who may impersonate it +
+# who becomes workspace admin.
+automation_service_account_email = "your-automation-sa@your-gcp-project-id.iam.gserviceaccount.com"
+terraform_admin_principals       = ["user:you@example.com"]
+workspace_admin_user             = "you@example.com"
+
+# Networking (non-overlapping CIDRs vs dev)
+network_name = "databricks-vpc"
+subnet_cidr  = "10.10.0.0/16"
+pod_cidr     = "10.11.0.0/16"
+svc_cidr     = "10.12.0.0/20"

@@ -1,0 +1,28 @@
+###############################################################################
+# Dev Environment - Variable Values (TEMPLATE)
+#
+# Copy this file to dev.tfvars and fill in your real values:
+#   cp environments/dev/dev.tfvars.example environments/dev/dev.tfvars
+# dev.tfvars is gitignored so your real IDs never get committed.
+#
+# Usage: terraform apply -var-file=environments/dev/dev.tfvars
+###############################################################################
+
+gcp_project_id        = "your-gcp-project-id"
+gcp_region            = "us-central1"
+environment           = "dev"
+databricks_account_id = "00000000-0000-0000-0000-000000000000" # from accounts.gcp.databricks.com
+workspace_name        = "databricks-gcp-dev"
+
+# Automation SA (must be a Databricks Account Admin) + who may impersonate it +
+# who becomes workspace admin. terraform_admin_principals must list the identity
+# YOU run `terraform apply` as.
+automation_service_account_email = "your-automation-sa@your-gcp-project-id.iam.gserviceaccount.com"
+terraform_admin_principals       = ["user:you@example.com"]
+workspace_admin_user             = "you@example.com"
+
+# Networking
+network_name = "databricks-vpc"
+subnet_cidr  = "10.0.0.0/16"
+pod_cidr     = "10.1.0.0/16"
+svc_cidr     = "10.2.0.0/20"
