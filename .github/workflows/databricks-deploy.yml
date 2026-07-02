@@ -101,6 +101,9 @@ jobs:
       TF_VAR_automation_service_account_email: ${{ secrets.GCP_SERVICE_ACCOUNT }}
       TF_VAR_workspace_admin_user:             ${{ secrets.DATABRICKS_ADMIN_USER }}
       TF_VAR_workspace_name: ${{ inputs.workspace_name != '' && inputs.workspace_name || format('databricks-gcp-{0}', inputs.environment) }}
+      # Keep the local admin's SA-impersonation grant (matches dev.tfvars) so CI apply
+      # doesn't churn it. HCL list literal, admin email sourced from the secret.
+      TF_VAR_terraform_admin_principals: '["user:${{ secrets.DATABRICKS_ADMIN_USER }}"]'
 
       # ── Databricks provider auth (account-level, google-id impersonation) ──
       DATABRICKS_HOST: "https://accounts.gcp.databricks.com"
