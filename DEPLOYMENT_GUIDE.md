@@ -141,8 +141,13 @@ export DATABRICKS_GOOGLE_SERVICE_ACCOUNT="<automation-sa>@<project>.iam.gservice
 > So the floor is provisioned **once, by a project owner, out-of-band** — then Terraform manages
 > everything else.
 
-**Easiest:** `./scripts/bootstrap.sh dev` performs all of these grants for you (run it as a
-Project Owner). The `gcloud` commands below are what it runs, for reference / manual setup.
+**Two ways to apply the floor (both owner-run):**
+- **New GCP project → `bootstrap/` Terraform** (recommended, reproducible): creates the
+  automation SA + WIF pool/provider + this IAM floor in its own state. See `bootstrap/README.md`.
+- **Existing project / quick grants → `./scripts/bootstrap.sh dev`**: applies these grants to an
+  already-existing SA.
+
+The `gcloud` commands below are what those run, for reference / manual setup.
 
 ```bash
 PROJECT="your-gcp-project-id"

@@ -1,0 +1,11 @@
+# Bootstrap layer values (TEMPLATE).
+#   cp bootstrap.tfvars.example bootstrap.tfvars   # bootstrap.tfvars is gitignored
+# Run as a PROJECT OWNER.
+
+project_id               = "your-gcp-project-id"
+region                   = "us-central1"
+automation_sa_account_id = "databricks-automation"       # -> databricks-automation@<project>.iam.gserviceaccount.com
+github_repo_owner        = "your-github-owner"            # org/user that owns the deploy repo
+wif_pool_id              = "github"
+wif_provider_id          = "databricks-deployment"
+local_admin_user         = "you@example.com"             # optional; "" to skip local impersonation grant
