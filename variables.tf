@@ -37,19 +37,13 @@ variable "workspace_name" {
 }
 
 variable "automation_service_account_email" {
-  description = "Pre-existing automation SA (Databricks Account Admin) that Databricks impersonates during workspace creation. It is granted the project-level bootstrap roles in modules/gcp-iam. Set in your tfvars."
+  description = "Pre-existing automation SA (Databricks Account Admin) that Databricks impersonates during workspace creation. Its bootstrap IAM floor (roleAdmin/projectIamAdmin/serviceAccountAdmin + tokenCreator) is pre-provisioned out-of-band, NOT by Terraform — see DEPLOYMENT_GUIDE.md §6. Read by scripts/CI to set DATABRICKS_GOOGLE_SERVICE_ACCOUNT. Set in your tfvars."
   type        = string
 }
 
 variable "workspace_admin_user" {
   description = "Account-level Databricks user email granted ADMIN on the created workspace (see workspace_access.tf). Set in your tfvars."
   type        = string
-}
-
-variable "terraform_admin_principals" {
-  description = "IAM principals allowed to impersonate the automation SA (e.g. [\"user:you@gmail.com\"]). Granted roles/iam.serviceAccountTokenCreator on the automation SA."
-  type        = list(string)
-  default     = []
 }
 
 # Networking

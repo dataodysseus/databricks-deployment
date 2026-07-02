@@ -131,66 +131,66 @@ export DATABRICKS_GOOGLE_SERVICE_ACCOUNT="<automation-sa>@<project>.iam.gservice
 
 ---
 
-## 6. ⭐ The IAM prerequisites (now codified in Terraform)
+## 6. ⭐ The automation-SA bootstrap floor (out-of-band, NOT Terraform-managed)
 
-> ✅ **These grants are now applied automatically by `modules/gcp-iam`** — you no longer
-> run the `gcloud` commands below by hand. Set two values in your tfvars and `terraform apply`
-> handles the rest:
-> ```hcl
-> automation_service_account_email = "your-automation-sa@your-gcp-project-id.iam.gserviceaccount.com"
-> terraform_admin_principals       = ["user:you@gmail.com"]   # identity you run terraform as
-> ```
-> **One bootstrap floor remains:** the identity running the *first* `terraform apply` must
-> already be a **Project Owner** (or hold `roles/resourcemanager.projectIamAdmin` +
-> `roles/iam.serviceAccountAdmin`). You can't grant IAM without permission to set IAM policy —
-> that's irreducible. After that, a clean deploy needs **zero manual IAM commands**.
->
-> The `gcloud` commands below are retained as reference / manual fallback and document exactly
-> what the Terraform resources do.
+> ⚠️ **These grants are deliberately NOT managed by Terraform.** In CI the runner **is**
+> the automation SA, and an identity that Terraform-manages its own IAM will **self-lock on
+> destroy**: Terraform removes the SA's `projectIamAdmin`, after which the SA can no longer
+> `setIamPolicy` to delete its remaining bindings → `403 Policy update access denied`. It also
+> creates a chicken-and-egg on a fresh apply (the SA needs the role before it can grant it).
+> So the floor is provisioned **once, by a project owner, out-of-band** — then Terraform manages
+> everything else.
 
-The deployment will fail at three different points if these grants are missing. Replace the placeholders with your values.
+**Easiest:** `./scripts/bootstrap.sh dev` performs all of these grants for you (run it as a
+Project Owner). The `gcloud` commands below are what it runs, for reference / manual setup.
 
 ```bash
 PROJECT="your-gcp-project-id"
 SA="your-automation-sa@${PROJECT}.iam.gserviceaccount.com"
-ME="you@gmail.com"   # the human identity running terraform
+ME="you@gmail.com"   # the human identity you run terraform as locally
 ```
 
-### 6a. Let YOUR identity impersonate the automation SA
-Without this you get: *"cannot configure default credentials"*.
+### 6a. Impersonation grants (mint the OIDC token for the Databricks provider)
+Without these you get *"cannot configure default credentials"*.
 
 ```bash
+# Local runs: let your human identity impersonate the SA.
 gcloud iam service-accounts add-iam-policy-binding "$SA" \
-  --member="user:${ME}" \
-  --role="roles/iam.serviceAccountTokenCreator" \
-  --project="$PROJECT"
+  --member="user:${ME}" --role="roles/iam.serviceAccountTokenCreator" --project="$PROJECT"
+
+# CI runs (WIF): let the SA mint its own OIDC token (self-impersonation).
+gcloud iam service-accounts add-iam-policy-binding "$SA" \
+  --member="serviceAccount:${SA}" --role="roles/iam.serviceAccountTokenCreator" --project="$PROJECT"
 ```
 
-### 6b. Give the automation SA the project permissions Databricks needs
-During workspace creation Databricks acts **as** this SA to create custom IAM roles and bind its managed service accounts. Without these you get: *"Insufficient permissions … iam.roles.create, … resourcemanager.projects.setIamPolicy, … iam.serviceAccounts.setIamPolicy"*.
+### 6b. Project roles the automation SA needs
+Databricks acts **as** this SA to create custom roles/bind its managed SAs, and (in CI) the SA
+runs the whole Terraform apply. Without these you get *"Insufficient permissions … iam.roles.create,
+… resourcemanager.projects.setIamPolicy, … iam.serviceAccounts.setIamPolicy"* or storage errors.
 
 ```bash
 for ROLE in \
   roles/iam.roleAdmin \
   roles/resourcemanager.projectIamAdmin \
-  roles/iam.serviceAccountAdmin ; do
+  roles/iam.serviceAccountAdmin \
+  roles/storage.admin ; do
     gcloud projects add-iam-policy-binding "$PROJECT" \
-      --member="serviceAccount:${SA}" \
-      --role="$ROLE" --condition=None
+      --member="serviceAccount:${SA}" --role="$ROLE" --condition=None
 done
 ```
 
-> **Why three roles?**
-> - `roles/iam.roleAdmin` → `iam.roles.create/update/delete/get`
-> - `roles/resourcemanager.projectIamAdmin` → `resourcemanager.projects.get/setIamPolicy`
-> - `roles/iam.serviceAccountAdmin` → `iam.serviceAccounts.get/setIamPolicy`
+> **Why these roles?**
+> - `roles/iam.roleAdmin` → `iam.roles.*` (Databricks creates custom roles)
+> - `roles/resourcemanager.projectIamAdmin` → project `setIamPolicy` (bind the managed SAs)
+> - `roles/iam.serviceAccountAdmin` → create/delete the `databricks-*` SAs
+> - `roles/storage.admin` → create/delete the DBFS bucket **and** read/write the Terraform state bucket (CI only)
 >
-> IAM grants take ~30–60s to propagate. If a re-run still fails on permissions, wait and retry.
+> For CI, the SA also needs `compute.admin`, `container.admin`, and `serviceusage.serviceUsageAdmin`
+> (VM/Cloud-Run automation SAs usually already have these). IAM changes take ~30–60s to propagate.
 
-> ✅ **Reproducibility:** these grants are codified in `modules/gcp-iam`
-> (`google_project_iam_member.automation_sa_roles` and
-> `google_service_account_iam_member.automation_sa_token_creator`). A fresh environment does
-> not repeat these manual steps — set the two tfvars values noted at the top of this section.
+> 🔒 **Rule of thumb learned the hard way:** never let an automation identity Terraform-manage
+> its *own* permissions. Keep the bootstrap floor out-of-band; Terraform manages the workload,
+> not the hands that run it.
 
 ---
 
@@ -293,8 +293,10 @@ curl -s -H "Authorization: Bearer $TOKEN" \
 | `Insufficient permissions … iam.roles.create, … projects.setIamPolicy` | SA lacks role/project-IAM admin | Grant `roles/iam.roleAdmin` + `roles/resourcemanager.projectIamAdmin` (§6b) |
 | `Insufficient permissions … iam.serviceAccounts.getIamPolicy/setIamPolicy` | SA can't manage IAM on *other* service accounts | Grant **project-level** `roles/iam.serviceAccountAdmin` (§6b) |
 | UI: *"You do not have permission to access this page in workspace …"* | Authenticated but no per-workspace entitlement | Add `databricks_mws_permission_assignment` (§8), then sign out/in |
+| `Error acquiring the state lock` … `storage.objects.create access denied` (CI) | The CI service account lacks write access to the GCS **state bucket** | Grant the SA `roles/storage.admin` (covers state + DBFS bucket) — see §6b |
 | `Error acquiring the state lock` | A previous run left a stale lock | `terraform force-unlock <LOCK_ID>` (ID is in the error) |
 | destroy: `network resource ... is already being used by .../firewalls/db-...` | Databricks left a `db-*` firewall rule in your VPC (untracked by TF) | Delete the orphan rule(s) then re-run destroy — or just use `./scripts/teardown.sh` (§12) |
+| destroy (CI): `403 Policy update access denied` deleting `automation_sa_roles[...]` | The SA was Terraform-managing its **own** IAM and removed its `projectIamAdmin` mid-destroy, self-locking | Don't manage the SA's own IAM in TF — keep the bootstrap floor out-of-band (§6). To recover: as owner, `terraform state rm` the stuck binding; the real grant is preserved |
 
 ---
 

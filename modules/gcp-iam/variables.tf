@@ -18,23 +18,10 @@ variable "databricks_account_id" {
   sensitive   = true
 }
 
-variable "automation_sa_email" {
-  description = <<-EOT
-    Email of the pre-existing automation service account that is registered as an
-    Account Admin in the Databricks account console and that Databricks impersonates
-    during workspace creation. This module grants it the project-level roles it needs
-    (codifies the former manual §6b gcloud steps).
-  EOT
-  type        = string
-}
-
-variable "terraform_admin_principals" {
-  description = <<-EOT
-    IAM principals (e.g. "user:you@gmail.com", "group:platform@example.com") that are
-    allowed to impersonate the automation SA to mint identity tokens for the Databricks
-    provider. Grants roles/iam.serviceAccountTokenCreator on the automation SA
-    (codifies the former manual §6a gcloud step). Leave empty to skip.
-  EOT
-  type        = list(string)
-  default     = []
-}
+# NOTE: The automation SA's own bootstrap IAM (roleAdmin, projectIamAdmin,
+# serviceAccountAdmin) and the tokenCreator impersonation grants are intentionally
+# NOT managed here. Because the CI runner IS the automation SA, having Terraform
+# manage the SA's own permissions causes a self-lockout on destroy (it removes its
+# projectIamAdmin, then can't delete the last binding) and a chicken-and-egg on a
+# fresh apply. These grants are pre-provisioned out-of-band — see scripts/bootstrap.sh
+# and DEPLOYMENT_GUIDE.md §6.

@@ -11,10 +11,9 @@ environment           = "prod"
 databricks_account_id = "00000000-0000-0000-0000-000000000000"
 workspace_name        = "databricks-gcp-prod"
 
-# Automation SA (must be a Databricks Account Admin) + who may impersonate it +
-# who becomes workspace admin.
+# Automation SA (must be a Databricks Account Admin; its bootstrap IAM is pre-granted
+# out-of-band, see DEPLOYMENT_GUIDE.md §6) + who becomes workspace admin.
 automation_service_account_email = "your-automation-sa@your-gcp-project-id.iam.gserviceaccount.com"
-terraform_admin_principals       = ["user:you@example.com"]
 workspace_admin_user             = "you@example.com"
 
 # Networking (non-overlapping CIDRs vs dev)

@@ -75,11 +75,9 @@ module "gcp_networking" {
 module "gcp_iam" {
   source = "./modules/gcp-iam"
 
-  project_id                 = var.gcp_project_id
-  environment                = var.environment
-  databricks_account_id      = var.databricks_account_id
-  automation_sa_email        = var.automation_service_account_email
-  terraform_admin_principals = var.terraform_admin_principals
+  project_id            = var.gcp_project_id
+  environment           = var.environment
+  databricks_account_id = var.databricks_account_id
 }
 
 module "databricks_workspace" {

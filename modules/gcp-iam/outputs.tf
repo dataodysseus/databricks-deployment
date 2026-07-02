@@ -17,8 +17,3 @@ output "dbfs_bucket_url" {
   description = "DBFS root GCS bucket URL"
   value       = google_storage_bucket.dbfs_root.url
 }
-
-output "automation_sa_email" {
-  description = "Automation service account granted the project-level bootstrap roles"
-  value       = var.automation_sa_email
-}

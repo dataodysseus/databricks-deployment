@@ -22,6 +22,8 @@ tfvar() { grep -E "^${1}[[:space:]]*=" "$VAR_FILE" | head -1 | cut -d'"' -f2; }
 GCP_PROJECT_ID="$(tfvar gcp_project_id)"
 GCP_REGION="$(tfvar gcp_region)"
 DATABRICKS_ACCOUNT_ID="$(tfvar databricks_account_id)"
+AUTOMATION_SA="$(tfvar automation_service_account_email)"
+WORKSPACE_ADMIN="$(tfvar workspace_admin_user)"
 
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -91,6 +93,47 @@ for api in "${APIS[@]}"; do
 done
 
 log "All required APIs enabled"
+
+###############################################################################
+# Step 3b: Bootstrap IAM for the automation SA (OUT-OF-BAND, run as project owner)
+#
+# The automation SA is the identity that Terraform runs as in CI, and that
+# Databricks impersonates during workspace creation. Its bootstrap floor must NOT
+# be managed by Terraform (an identity managing its own IAM self-locks on destroy).
+# We grant it here, once, as the owner running this script.
+###############################################################################
+echo ""
+echo "── Step 3b: Bootstrap IAM for automation SA ─────────────"
+echo ""
+if [[ -n "$AUTOMATION_SA" ]]; then
+  for ROLE in \
+    roles/iam.roleAdmin \
+    roles/resourcemanager.projectIamAdmin \
+    roles/iam.serviceAccountAdmin \
+    roles/storage.admin; do
+    gcloud projects add-iam-policy-binding "$GCP_PROJECT_ID" \
+      --member="serviceAccount:${AUTOMATION_SA}" --role="$ROLE" --condition=None -q >/dev/null \
+      && echo "  granted ${ROLE} → ${AUTOMATION_SA}"
+  done
+  # Self-impersonation: the SA mints its own OIDC token for the Databricks provider in CI.
+  gcloud iam service-accounts add-iam-policy-binding "$AUTOMATION_SA" \
+    --project="$GCP_PROJECT_ID" \
+    --member="serviceAccount:${AUTOMATION_SA}" \
+    --role="roles/iam.serviceAccountTokenCreator" --condition=None -q >/dev/null \
+    && echo "  granted tokenCreator (self) → ${AUTOMATION_SA}"
+  # Let the human admin impersonate the SA for LOCAL terraform runs.
+  if [[ -n "$WORKSPACE_ADMIN" ]]; then
+    gcloud iam service-accounts add-iam-policy-binding "$AUTOMATION_SA" \
+      --project="$GCP_PROJECT_ID" \
+      --member="user:${WORKSPACE_ADMIN}" \
+      --role="roles/iam.serviceAccountTokenCreator" --condition=None -q >/dev/null \
+      && echo "  granted tokenCreator → user:${WORKSPACE_ADMIN}"
+  fi
+  log "Automation SA bootstrap IAM in place"
+  warn "NB: the SA must ALSO be added as an Account Admin in the Databricks console."
+else
+  warn "automation_service_account_email not set in tfvars — skipping SA bootstrap IAM."
+fi
 
 ###############################################################################
 # Step 4: Verify Databricks account access

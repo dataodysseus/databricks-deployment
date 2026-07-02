@@ -143,46 +143,15 @@ resource "google_project_service" "required_apis" {
 }
 
 ###############################################################################
-# Automation service account bootstrap grants
+# Automation service account bootstrap grants — NOT managed by Terraform.
 #
-# Codifies the former manual §6 gcloud steps from DEPLOYMENT_GUIDE.md so a clean
-# deploy needs zero manual IAM commands.
+# The automation SA's own project roles (roleAdmin, projectIamAdmin,
+# serviceAccountAdmin) and the tokenCreator impersonation grants used to live here.
+# They were removed because the CI runner IS the automation SA: letting Terraform
+# manage the SA's own IAM causes a self-lockout on destroy (TF removes the SA's
+# projectIamAdmin, then the SA can no longer setIamPolicy to delete the last binding
+# → "403 Policy update access denied") and a chicken-and-egg on a fresh apply.
 #
-# NOTE (bootstrap floor): these resources set IAM policy on the project and on the
-# automation SA. The identity running the FIRST `terraform apply` must therefore
-# already hold roles/resourcemanager.projectIamAdmin (or Owner) and
-# roles/iam.serviceAccountAdmin on the SA. A Project Owner satisfies both. This is
-# the irreducible floor — you cannot grant IAM without permission to set IAM policy.
+# These grants are the irreducible bootstrap floor and are provisioned ONCE by a
+# project owner, out-of-band. See scripts/bootstrap.sh and DEPLOYMENT_GUIDE.md §6.
 ###############################################################################
-
-locals {
-  # §6b — project-level roles the automation SA needs because Databricks acts AS it
-  # to create custom roles and bind its managed service accounts during workspace
-  # creation. Missing these produces "Insufficient permissions … iam.roles.create,
-  # … resourcemanager.projects.setIamPolicy, … iam.serviceAccounts.setIamPolicy".
-  automation_sa_project_roles = [
-    "roles/iam.roleAdmin",                   # iam.roles.create/update/delete/get
-    "roles/resourcemanager.projectIamAdmin", # resourcemanager.projects.get/setIamPolicy
-    "roles/iam.serviceAccountAdmin",         # iam.serviceAccounts.get/setIamPolicy
-  ]
-}
-
-# §6b — grant the automation SA its project-level roles
-resource "google_project_iam_member" "automation_sa_roles" {
-  for_each = toset(local.automation_sa_project_roles)
-
-  project = var.project_id
-  role    = each.value
-  member  = "serviceAccount:${var.automation_sa_email}"
-}
-
-# §6a — let human/CI identities impersonate the automation SA to mint the identity
-# token the Databricks provider needs. Without this: "cannot configure default
-# credentials".
-resource "google_service_account_iam_member" "automation_sa_token_creator" {
-  for_each = toset(var.terraform_admin_principals)
-
-  service_account_id = "projects/${var.project_id}/serviceAccounts/${var.automation_sa_email}"
-  role               = "roles/iam.serviceAccountTokenCreator"
-  member             = each.value
-}
