@@ -1,0 +1,63 @@
+# ============================================================
+# Terraform Validate — fast, credential-free CI check
+# ============================================================
+# Runs `terraform fmt -check` + `terraform validate` on every push/PR that
+# touches Terraform files. No GCP/Databricks auth needed: validate uses
+# `-backend=false` so it never contacts the state bucket or any provider API —
+# it only checks syntax, references, types, and provider schemas.
+#
+# Covers both root configs: the workload (.) and the bootstrap layer (bootstrap/).
+# ============================================================
+
+name: "Terraform Validate"
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "**.tf"
+      - "**.tfvars.example"
+      - "**/.terraform.lock.hcl"
+      - ".github/workflows/terraform-validate.yml"
+  pull_request:
+    paths:
+      - "**.tf"
+      - "**.tfvars.example"
+      - "**/.terraform.lock.hcl"
+      - ".github/workflows/terraform-validate.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: "fmt + validate"
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.15.7"
+          terraform_wrapper: false
+
+      # Formatting is repo-wide and recursive (covers modules/ and bootstrap/).
+      - name: Terraform fmt (check)
+        run: terraform fmt -check -recursive
+
+      # Each root module is initialized/validated separately. -backend=false skips
+      # backend init, so no credentials or state bucket are required.
+      - name: Validate workload (root)
+        run: |
+          terraform init -backend=false -input=false
+          terraform validate
+
+      - name: Validate bootstrap
+        working-directory: bootstrap
+        run: |
+          terraform init -backend=false -input=false
+          terraform validate
