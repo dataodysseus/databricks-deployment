@@ -1,6 +1,17 @@
 # Databricks on GCP — Terraform Deployment
 
-Deploy a Databricks workspace on Google Cloud Platform using Terraform.
+Deploy a Databricks workspace on Google Cloud Platform using Terraform, from your
+machine or fully automated via GitHub Actions.
+
+## Documentation
+
+| Doc | What it covers |
+|-----|----------------|
+| **README.md** (this file) | Overview, structure, quick start |
+| **[CICD.md](CICD.md)** | GitHub Actions automation — WIF/OIDC auth, remote state, plan/apply/destroy, secrets model |
+| **[DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md)** | Operational runbook, the IAM bootstrap floor (§6), teardown, troubleshooting |
+| **[TERRAFORM_PRIMER.md](TERRAFORM_PRIMER.md)** | Terraform concepts, taught from this repo's code |
+| **[bootstrap/README.md](bootstrap/README.md)** | One-time landing zone for a **new** GCP project (SA + IAM floor + WIF) |
 
 ## Project Details
 
