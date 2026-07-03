@@ -126,6 +126,55 @@ Doing this from VS Code with the Terraform extension is the move: syntax highlig
 
 In Part 1 we built a Databricks workspace by hand from a laptop. That's reproducible-*ish* — but honestly it depends on *my* gcloud login, *my* ADC, *my* local state file sitting in a folder somewhere. If I got hit by a bus, so did the deployment. Part 2 fixes that by removing *me* from the loop entirely: keyless authentication, shared state, a workflow with a friendly dropdown, and a repo laid out so dev, test, and prod all flow through the same code. By the end, deploying or destroying a workspace is a single click in GitHub, and anyone with the right access can pull the lever.
 
+Before we get into the *how*, here's the whole path at a glance — clone to live workspace and back. The sections that follow walk each phase in detail; keep this map handy as the shape of where we're going.
+
+```
+ DEPLOY DATABRICKS ON GCP — FROM CLONE TO LIVE WORKSPACE
+
+ ┌─ PHASE 1 · ONE-TIME SETUP ────────────── run once, as project owner ─┐
+ │                                                                      │
+ │   [1] Clone repo + check prerequisites            (your machine)     │
+ │        │                                                             │
+ │        ▼                                                             │
+ │   [2] Get Databricks Account ID                   (databricks console)
+ │        │                                                             │
+ │        ▼                                                             │
+ │   [3] Create Terraform state bucket (gcloud)      (your machine)     │
+ │        │                                                             │
+ │        ▼                                                             │
+ │   [4] Provision landing zone                      (your machine)     │
+ │        │      ├─ new project ...... cd bootstrap && terraform apply  │
+ │        │      └─ existing project . ./scripts/bootstrap.sh           │
+ │        ▼                                                             │
+ │   [5] Add SA as Databricks Account Admin  ⚠ MANUAL — no API          │
+ │        │                                          (databricks console)
+ │        ▼                                                             │
+ │   [6] Set the 5 GitHub Environment secrets        (github)           │
+ │                                                                      │
+ └──────────────────────────────────────────────────────────────────────┘
+          │
+          ▼
+ ┌─ PHASE 2 · DEPLOY ─────────────── repeatable, runs as automation SA ─┐
+ │                                                                      │
+ │   [7] Actions → Deploy → action: plan   → review (~32 to add)        │
+ │        │                                                             │
+ │        ▼                                                             │
+ │   [8] Same workflow → action: apply     → ~15–20 min (GKE)           │
+ │        │                                                             │
+ │        ▼                                                             │
+ │   [9] Workspace URL prints in job Summary  ✓ LIVE                    │
+ │                                                                      │
+ └──────────────────────────────────────────────────────────────────────┘
+          │
+          ▼
+ ┌─ PHASE 3 · TEARDOWN ─────────────────────────────────────────────────┐
+ │                                                                      │
+ │  [10] Same workflow → action: destroy   (auto db-* firewall cleanup) │
+ │        Retire the whole project → delete the GCP project             │
+ │                                                                      │
+ └──────────────────────────────────────────────────────────────────────┘
+```
+
 ## 1. GitHub OIDC — killing the service-account key
 
 The very first instinct when you automate a cloud deploy is to export a service-account JSON key, paste it into a GitHub secret, and move on with your life. Please don't. A long-lived key sitting in a CI system is the single most common way clouds get popped — it never expires, and the day it leaks (a log, a fork, a screen-share), it's game over and you won't even know when it happened.
