@@ -206,11 +206,31 @@ terraform destroy -var-file=environments/dev/dev.tfvars
 
 ## Cost Estimate (dev, us-central1)
 
+Of the ~32 resources deployed, most are **free** (VPC, subnet, router, firewall, service
+accounts, IAM bindings, API enablement, and the Databricks network/permission resources).
+The cost is concentrated in a handful of always-on items plus usage-based compute.
+
+**Idle floor** — bills whether or not anyone uses the workspace:
+
 | Resource | Approx. monthly cost |
 |----------|---------------------|
-| GKE cluster (e2-standard-4 × 2) | ~$120 |
-| Cloud NAT | ~$5 |
-| GCS bucket (DBFS) | ~$2 |
-| Databricks DBU usage | varies by workload |
+| GKE cluster management fee (workspace runs on GKE) | ~$73 |
+| GKE baseline node VMs (system pods) | ~$100–200 |
+| Cloud NAT gateway | ~$32 + ~$0.045/GB processed |
+| GCS bucket (DBFS root) storage | a few $ |
+| **Idle floor total** | **~$200–300/mo** |
 
-> **Tip:** Terminate clusters when not in use to minimize DBU costs.
+**Variable** — bills only while your clusters run (≈ $0 when all clusters are terminated):
+
+| Resource | Cost |
+|----------|------|
+| Databricks DBUs (license) | ~$0.22–0.55/DBU, by tier + workload |
+| Job/cluster node VMs | standard GCE compute rates |
+| Network egress | ~$0.08–0.12/GB |
+
+> **Not serverless:** the workspace's own GKE cluster bills continuously — idling a
+> workspace overnight is **not** free. Terminate clusters to kill DBU/VM cost, and run
+> `destroy` (or the GitHub Action's destroy) to remove the idle floor entirely.
+>
+> Figures are order-of-magnitude, us-central1, and vary with region/tier/usage. Confirm
+> against the live GCP + Databricks pricing pages.

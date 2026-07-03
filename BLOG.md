@@ -94,6 +94,14 @@ Words are fine, but I didn't really *get* this stack until I sketched it. Here's
 
 Read it top to bottom and the earlier sections snap into place: the two secondary ranges exist *because* there's a GKE cluster in there; the NAT exists *because* those nodes are private but still need PyPI; the `mws_networks` resource is the arrow — the handshake where your VPC gets registered with the control plane. Everything above the dashed HTTPS line lives in *your* project and gets built by Terraform. Everything below it is Databricks' world, reached through that one account you made an admin in Section 2.
 
+And that Cloud NAT deserves a sentence, because it's the piece people question when they see the bill. The GKE nodes are deliberately **private** — no public IPs, which is the security payoff of the customer-managed VPC. But private nodes still have to reach *out* to install libraries and phone the control plane, and a machine with no public IP can't do that on its own. Cloud NAT is the one-way door: egress to the internet, zero ingress from it. So it isn't optional plumbing — it's the thing that lets you have private nodes *and* a working `pip install`. You're paying for a security posture, not a luxury.
+
+## A word on the network ranges — yes, you get to choose
+
+When I first ran this, I didn't hand Terraform a single IP range and it worked fine — which raises a fair question: were those chosen *for* me, and would an enterprise get the same freedom? The answer is that nothing was hardcoded. The subnet and the two secondary ranges are plain Terraform **variables** — `subnet_cidr`, `pod_cidr`, `svc_cidr` — that simply ship with sensible defaults (`10.0.0.0/16` for the subnet, `10.1.0.0/16` for pods, `10.2.0.0/20` for services). On a fresh project with nothing else around, those defaults don't collide with anything, so it "just works" and you never think about it.
+
+In an enterprise, you almost always *will* think about it — and you should. The ranges are yours to set; you override those three variables in your `.tfvars` and you're done. What changes is that you now have real constraints to respect: the ranges must be **private (RFC 1918)** and **must not overlap** with anything you peer or connect to — other VPCs, on-prem networks over VPN/Interconnect, or shared services — because overlapping CIDRs are the classic, painful networking outage. They also have to be **big enough for scale**: because the workspace runs on GKE, the *pods* secondary range especially has to accommodate a lot of addresses (roughly nodes × pods-per-node), and Databricks publishes a sizing table mapping workspace size to the minimum CIDR you should give each range. The short version: the defaults are a convenience for a greenfield demo, not a limitation — in a real deployment you plan the address space with your network team and pass it in, exactly the same way, through those variables.
+
 ## 4. Testing locally from VS Code
 
 Before you automate a single thing, prove it works from your own machine. That tight, slightly nerve-wracking loop — edit, plan, apply, stare at the output — is where you actually learn the system, and it's a lot cheaper to learn there than inside a CI log.
@@ -185,7 +193,30 @@ Here's the section most tutorials skip, and it's the one that saves you actual m
 
 A couple of habits that keep the bill honest: destroy dev workspaces at the end of a work session rather than letting them idle overnight; keep an eye on the DBU meter, since compute is the real cost, not the plumbing; and if you're just demoing, treat "spin up in the morning, destroy by evening" as the default rhythm. The entire point of a one-click teardown is that leaving something running should feel like a *choice*, not an accident.
 
-## 6. The lesson that shaped the whole design
+## 6. What does it actually cost?
+
+Here's a number that trips everyone up: the deployment stands up **32 resources**, and the natural assumption is "32 things to pay for." The reality is much friendlier — roughly a third of them cost *nothing*, and the whole bill really comes down to about five items. Once you see it that way, the cost model stops being scary.
+
+Start with the free stuff, because there's a lot of it. The VPC, the subnet and its two secondary ranges, the Cloud Router, both firewall rules, both service accounts, every IAM binding, the API enablements, and the Databricks-side registration resources (`databricks_mws_networks` and `databricks_mws_permission_assignment`) — all **$0**. That's the majority of the 32. They're plumbing: they define *how* things connect and *who* can do *what*, but they don't run anything.
+
+The money hides in a much shorter list:
+
+| What actually costs money | When it bills | Rough cost (us-central1) |
+|---|---|---|
+| **Cloud NAT** gateway | always, while it exists | ~$32/mo + ~$0.045/GB processed |
+| **GCS bucket** (DBFS root) storage | always | a few $/mo when idle |
+| **GKE cluster management fee** (the workspace runs on GKE) | always, while the workspace exists | ~$0.10/hr (~$73/mo) |
+| **GKE baseline node VMs** (system pods) | always, even with zero jobs | ~$100–200/mo idle |
+| **DBUs** — Databricks license units | only while *your* clusters run | ~$0.22–0.55/DBU · $0 when idle |
+| **Job/cluster node VMs** | only while *your* clusters run | standard GCE compute rates |
+
+The single most important thing to internalize — and the bit most tutorials quietly omit — is that a Databricks-on-GCP workspace is **not** a serverless "$0 when idle" service. `databricks_mws_workspaces` looks like one line of Terraform, but behind it sits a real, always-on GKE cluster, and that cluster bills whether or not anyone ever opens a notebook. So there's an **idle floor** of roughly **$200–300/month** — Cloud NAT, the GKE management fee, the baseline nodes, and a little bucket storage — that exists purely for the workspace to *be there*.
+
+On top of that floor sits the **variable** cost: DBUs plus the compute VMs of whatever clusters you actually spin up. That part genuinely does drop to near-zero when every cluster is terminated — but the floor does not. This is the whole reason the one-click **destroy** from the last section matters so much on a free trial: idling a workspace overnight isn't free, and the meter you can't see (the GKE cluster) is the one doing the damage.
+
+One question that comes up immediately: *which account gets billed?* Think of it as two meters, not two invoices. The **GCP infrastructure** — the VPC, Cloud NAT, the GKE cluster and all node VMs, bucket storage, egress — bills to your **GCP account**; the machines are yours. The **DBUs** — Databricks' license units for the software layer running on top — are billed by **Databricks**, but on GCP that billing usually flows *through* the GCP Marketplace, so it often lands on your GCP invoice as a Databricks line item rather than a separate charge. The mental model that matters: when a cluster runs you pay *both* meters at once (the VM **and** the DBU on top of it); terminate the cluster and both stop; the idle floor keeps ticking on the GCP side until you `destroy`. (Every figure here is order-of-magnitude and moves with region, tier, and usage — confirm against the live pricing pages before you quote it.)
+
+## 7. The lesson that shaped the whole design
 
 Let me close with the bug that taught me the most, because the fix genuinely *became* the architecture. Originally — and it seemed so reasonable at the time — the workload Terraform granted the automation service account its own bootstrap roles. Convenient. Worked perfectly on my laptop. Then the first CI `destroy` ran, and it failed in the most poetic way imaginable.
 
